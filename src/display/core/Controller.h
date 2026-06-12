@@ -53,7 +53,7 @@ class Controller {
     virtual float getCurrentPuckFlow() const { return currentPuckFlow; }
     virtual float getCurrentPumpFlow() const { return currentPumpFlow; }
 
-    bool isTaskHealthy() const { return is_task_healthy(eTaskGetState(taskHandle)); }
+    bool isTaskHealthy() const { return is_task_healthy(eTaskGetState(logicTaskHandle)); }
 
     void autotune(int testTime, int samples, int heaterWattage);
     void startProcess(Process *process);
