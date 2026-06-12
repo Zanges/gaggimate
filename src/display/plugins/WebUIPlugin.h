@@ -14,7 +14,7 @@
 constexpr size_t UPDATE_CHECK_INTERVAL = 30 * 60 * 1000;
 constexpr size_t CLEANUP_PERIOD = 5 * 1000;
 constexpr size_t STATUS_PERIOD = 500;
-constexpr size_t DNS_PERIOD = 50;
+constexpr size_t DNS_PERIOD = 100;
 
 const String LOCAL_URL = "http://4.4.4.1/";
 const String RELEASE_URL = "https://github.com/jniebuhr/gaggimate/releases/";
@@ -31,6 +31,10 @@ class WebUIPlugin : public Plugin {
     void setupServer();
     void start();
     void stop();
+
+    void tick();
+    void runUpdate();
+    void checkUpdate();
 
     // Websocket handlers
     void handleWebSocketData(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type, void *arg, uint8_t *data,
@@ -72,21 +76,22 @@ class WebUIPlugin : public Plugin {
     DNSServer *dnsServer = nullptr;
     ProfileManager *profileManager = nullptr;
 
-    long lastUpdateCheck = 0;
-    long lastStatus = 0;
-    long lastCleanup = 0;
-    long lastDns = 0;
+    unsigned long lastUpdateCheck = 0;
+    unsigned long lastCleanup = 0;
+    unsigned long lastDns = 0;
     bool updating = false;
     bool apMode = false;
     bool serverRunning = false;
     String updateComponent = "";
     float currentBluetoothWeight = 0.0f;
-    // Reused for every 500ms status broadcast. Allocating a fresh JsonDocument
-    // each tick was a major contributor to internal-heap fragmentation
-    // (device reports 33%+ fragmentation, causing AsyncTCP buffer allocs to
-    // stall mid-asset-serve). Keeping one doc lets its underlying pool grow
-    // once and stay put.
     JsonDocument statusDoc{&psramAllocator};
+
+    xTaskHandle loopTaskHandle;
+    xTaskHandle runUpdateTaskHandle;
+    xTaskHandle checkUpdateTaskHandle;
+    static void loopTask(void *arg);
+    static void runUpdateTask(void *arg);
+    static void checkUpdateTask(void *arg);
 };
 
 #endif // WEBUIPLUGIN_H

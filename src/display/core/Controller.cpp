@@ -104,7 +104,6 @@ void Controller::setup() {
     this->onScreenReady();
 
     updateLastAction();
-    xTaskCreatePinnedToCore(loopTask, "Controller::loopControl", configMINIMAL_STACK_SIZE * 6, this, 2, &taskHandle, 0);
     xTaskCreatePinnedToCore(loopLogicTask, "Controller::loopLogic", configMINIMAL_STACK_SIZE * 6, this, 3, &logicTaskHandle, 0);
 }
 
@@ -524,6 +523,7 @@ void Controller::loop() {
 
 void Controller::loopLogic() {
     if (isErrorState()) {
+        loopControl();
         return;
     }
 
@@ -577,6 +577,8 @@ void Controller::loopLogic() {
         deactivateGrind();
     if (mode != MODE_STANDBY && settings.getStandbyTimeout() > 0 && now > lastAction + settings.getStandbyTimeout())
         activateStandby();
+
+    loopControl();
 }
 
 void Controller::loopControl() {
@@ -1153,15 +1155,6 @@ void Controller::handleProfileUpdate() {
     pluginManager->trigger("boiler:targetTemperature:change", "value", profileManager->getSelectedProfile().temperature);
     pluginManager->trigger("controller:targetDuration:change", "value", profileManager->getSelectedProfile().getTotalDuration());
     pluginManager->trigger("controller:targetVolume:change", "value", profileManager->getSelectedProfile().getTotalVolume());
-}
-
-void Controller::loopTask(void *arg) {
-    TickType_t lastWake = xTaskGetTickCount();
-    auto *controller = static_cast<Controller *>(arg);
-    while (true) {
-        controller->loopControl();
-        xTaskDelayUntil(&lastWake, pdMS_TO_TICKS(controller->getMode() == MODE_STANDBY ? 1000 : PROGRESS_INTERVAL));
-    }
 }
 
 void Controller::loopLogicTask(void *arg) {

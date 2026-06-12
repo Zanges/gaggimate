@@ -102,34 +102,31 @@ void WebUIPlugin::setup(Controller *_controller, PluginManager *_pluginManager) 
                       [this](Event const &event) { this->currentBluetoothWeight = event.getFloat("value"); });
 
     setupServer();
+    xTaskCreatePinnedToCore(loopTask, "WebUIPlugin::loop", configMINIMAL_STACK_SIZE * 4, this, 1, &loopTaskHandle, 0);
 }
 
-void WebUIPlugin::loop() {
+void WebUIPlugin::tick() {
     if (updating) {
-        // Pass which component is being flashed: a controller update streams the
-        // firmware over BLE (wants a low-latency link), a display update is over
-        // Wi-Fi (wants BLE to stay out of the radio's way). "" = both.
-        pluginManager->trigger("ota:update:start", "component", updateComponent);
-        ota->update(updateComponent != "display", updateComponent != "controller");
-        pluginManager->trigger("ota:update:end");
-        updating = false;
+        if (!is_task_healthy(eTaskGetState(runUpdateTaskHandle))) {
+            xTaskCreatePinnedToCore(runUpdateTask, "WebUIPlugin::runUpdate", configMINIMAL_STACK_SIZE * 8, this, 1,
+                                    &runUpdateTaskHandle, 0);
+        }
     }
     if (!serverRunning) {
         return;
     }
     const unsigned long now = millis();
-    // Skip the (blocking, TLS) update check while a process is active: a brew/steam/grind
-    // must not have the control loop stalled for the duration of the handshake, nor compete
-    // with it for memory. isActive() is the reliable "a process is running" signal. Subtraction
-    // (not now > last + interval) keeps the interval check millis()-rollover-safe.
-    if (!controller->isActive() && (lastUpdateCheck == 0 || now - lastUpdateCheck > UPDATE_CHECK_INTERVAL)) {
-        ota->checkForUpdates();
-        pluginManager->trigger("ota:update:status", "value", ota->isUpdateAvailable());
-        lastUpdateCheck = now;
-        updateOTAStatus(ota->getCurrentVersion());
+    if (!controller->isActive() && (lastUpdateCheck == 0 || now - lastUpdateCheck > UPDATE_CHECK_INTERVAL) && !updating) {
+        if (!is_task_healthy(eTaskGetState(checkUpdateTaskHandle))) {
+            xTaskCreatePinnedToCore(checkUpdateTask, "WebUIPlugin::checkUpdate", configMINIMAL_STACK_SIZE * 8, this, 1,
+                                    &checkUpdateTaskHandle, 0);
+        }
     }
-    if (now > lastStatus + STATUS_PERIOD && !ws.getClients().empty()) {
-        lastStatus = now;
+    if (now > lastCleanup + CLEANUP_PERIOD) {
+        lastCleanup = now;
+        ws.cleanupClients();
+    }
+    if (!ws.getClients().empty()) {
         statusDoc.clear();
         statusDoc["tp"] = "evt:status";
         statusDoc["ct"] = controller->getCurrentTemp();
@@ -225,10 +222,28 @@ void WebUIPlugin::loop() {
 
         broadcastJson(statusDoc);
     }
-    if (now > lastCleanup + CLEANUP_PERIOD) {
-        lastCleanup = now;
-        ws.cleanupClients();
-    }
+}
+
+void WebUIPlugin::runUpdate() {
+    // Pass which component is being flashed: a controller update streams the
+    // firmware over BLE (wants a low-latency link), a display update is over
+    // Wi-Fi (wants BLE to stay out of the radio's way). "" = both.
+    pluginManager->trigger("ota:update:start", "component", updateComponent);
+    ota->update(updateComponent != "display", updateComponent != "controller");
+    pluginManager->trigger("ota:update:end");
+    updating = false;
+}
+
+void WebUIPlugin::checkUpdate() {
+    unsigned long now = millis();
+    ota->checkForUpdates();
+    pluginManager->trigger("ota:update:status", "value", ota->isUpdateAvailable());
+    lastUpdateCheck = now;
+    updateOTAStatus(ota->getCurrentVersion());
+}
+
+void WebUIPlugin::loop() {
+    unsigned long now = millis();
     if (now > lastDns + DNS_PERIOD && dnsServer != nullptr) {
         lastDns = now;
         dnsServer->processNextRequest();
@@ -995,4 +1010,25 @@ void WebUIPlugin::handleCoreDumpDownload(AsyncWebServerRequest *request) {
     response->addHeader("Cache-Control", "no-cache");
 
     request->send(response);
+}
+
+void WebUIPlugin::loopTask(void *arg) {
+    auto *plugin = static_cast<WebUIPlugin *>(arg);
+    while (true) {
+        plugin->tick();
+        // Use canonical interval from shot log format to avoid divergence.
+        vTaskDelay(STATUS_PERIOD / portTICK_PERIOD_MS);
+    }
+}
+
+void WebUIPlugin::runUpdateTask(void *arg) {
+    auto *plugin = static_cast<WebUIPlugin *>(arg);
+    plugin->runUpdate();
+    vTaskDelete(NULL);
+}
+
+void WebUIPlugin::checkUpdateTask(void *arg) {
+    auto *plugin = static_cast<WebUIPlugin *>(arg);
+    plugin->checkUpdate();
+    vTaskDelete(NULL);
 }
